@@ -1,0 +1,21 @@
+# Build output
+target/
+shinka/target/
+*.class
+*.jar
+*.exe
+shinka/output*/
+dependency-reduced-pom.xml
+launch4j.log
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local database
+*.db

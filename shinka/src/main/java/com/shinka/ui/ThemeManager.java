@@ -54,6 +54,11 @@ public class ThemeManager {
     public static String timerRunning() { return isDark() ? "#E8836A" : "#C8553D"; }
     public static String timerPaused()  { return isDark() ? "#E2B062" : "#B7832F"; }
 
+    // ── Status
+    public static String danger()      { return isDark() ? "#E8836A" : "#C8553D"; }
+    public static String dangerSoft()  { return isDark() ? "#3A2620" : "#F8E6E1"; }
+    public static String warning()     { return isDark() ? "#E2B062" : "#9A6B1F"; }
+
     // ── Heatmap (level 0 = no study, 4 = most)
     public static String heatLevel(int level) {
         String[] dark  = { "#232421", "#2F422E", "#4A6D47", "#709C6C", "#A3CD9F" };

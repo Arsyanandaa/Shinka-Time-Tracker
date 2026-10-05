@@ -1,13 +1,23 @@
 package com.shinka.ui;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
+import com.shinka.controller.ProgressController;
+import com.shinka.controller.ProgressController.SubjectProgress;
+import com.shinka.controller.StudySessionController;
 import com.shinka.controller.SubjectController;
 import com.shinka.model.Subject;
 
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
+import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
@@ -16,6 +26,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.DatePicker;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.Label;
@@ -35,6 +46,7 @@ public class SubjectsView extends VBox {
 
     private final SubjectController       subjectController;
     private final ObservableList<Subject> subjects = FXCollections.observableArrayList();
+    private final ProgressController      progressController = new ProgressController();
 
     // Header
     private Label heading, hint;
@@ -181,28 +193,73 @@ public class SubjectsView extends VBox {
         dialog.setTitle("Edit subject");
         if (getScene() != null) dialog.initOwner(getScene().getWindow());
 
-        Label titleLbl = label(12, FontWeight.SEMI_BOLD);
-        titleLbl.setText("Title");
-        muted(titleLbl);
+        // ── About
         TextField titleField = new TextField(subject.getTitle());
         titleField.setPromptText("e.g. Target band 7.5, Finish chapter 3");
-        titleField.setFont(Font.font(ThemeManager.FONT, 13));
-        titleField.focusedProperty().addListener((o, was, is) -> styleInput(titleField));
-        styleInput(titleField);
+        input(titleField);
 
-        Label notesLbl = label(12, FontWeight.SEMI_BOLD);
-        notesLbl.setText("Notes");
-        muted(notesLbl);
         TextArea notesArea = new TextArea(subject.getNotes());
         notesArea.setPromptText("Goals, resources, or anything about this subject");
-        notesArea.setFont(Font.font(ThemeManager.FONT, 13));
-        notesArea.setPrefRowCount(6);
+        notesArea.setPrefRowCount(4);
         notesArea.setWrapText(true);
-        notesArea.focusedProperty().addListener((o, was, is) -> styleInput(notesArea));
-        styleInput(notesArea);
+        input(notesArea);
 
-        VBox form = new VBox(6, titleLbl, titleField, gap(10), notesLbl, notesArea);
-        form.setPrefWidth(440);
+        // ── Goals
+        TextField weeklyField = new TextField(hoursText(subject.getWeeklyGoalMinutes()));
+        weeklyField.setPromptText("e.g. 5");
+        weeklyField.setPrefWidth(90);
+        input(weeklyField);
+
+        TextField targetField = new TextField(hoursText(subject.getTargetMinutes()));
+        targetField.setPromptText("e.g. 50");
+        targetField.setPrefWidth(90);
+        input(targetField);
+
+        DatePicker datePicker = new DatePicker();
+        datePicker.setPromptText("Pick a date");
+        datePicker.setPrefWidth(170);
+        try {
+            if (!subject.getTargetDate().isBlank()) datePicker.setValue(LocalDate.parse(subject.getTargetDate()));
+        } catch (Exception ignored) { }
+        styleDatePicker(datePicker);
+
+        HBox weeklyRow = new HBox(10, weeklyField, mutedText("hours per week"));
+        weeklyRow.setAlignment(Pos.CENTER_LEFT);
+
+        HBox targetRow = new HBox(10, targetField, mutedText("hours in total, by"), datePicker);
+        targetRow.setAlignment(Pos.CENTER_LEFT);
+
+        Label goalsHint = mutedText("Leave a field empty for no goal. Total includes all the time you've already logged.");
+        goalsHint.setWrapText(true);
+        goalsHint.setFont(Font.font(ThemeManager.FONT, 12));
+        goalsHint.setMinHeight(Region.USE_PREF_SIZE);
+
+        Label error = label(12, FontWeight.NORMAL);
+        error.setStyle("-fx-text-fill: " + ThemeManager.danger() + ";");
+        error.setWrapText(true);
+        error.setMinHeight(Region.USE_PREF_SIZE);
+        error.setVisible(false);
+        error.setManaged(false);
+
+        Region divider = new Region();
+        divider.setMinHeight(1);
+        divider.setMaxHeight(1);
+        divider.setStyle("-fx-background-color: " + ThemeManager.separator() + ";");
+        VBox.setMargin(divider, new Insets(10, 0, 6, 0));
+
+        VBox form = new VBox(6,
+            fieldLabel("Title"), titleField,
+            gap(6),
+            fieldLabel("Notes"), notesArea,
+            divider,
+            fieldLabel("Weekly goal"), weeklyRow,
+            gap(6),
+            fieldLabel("Target"), targetRow,
+            gap(2),
+            goalsHint,
+            error
+        );
+        form.setPrefWidth(480);
 
         DialogPane pane = dialog.getDialogPane();
         pane.setContent(form);
@@ -210,16 +267,70 @@ public class SubjectsView extends VBox {
         pane.getButtonTypes().addAll(saveType, ButtonType.CANCEL);
         styleDialog(pane, "Edit subject", subject.getName());
 
-        styleDialogButton((Button) pane.lookupButton(saveType), "primary");
+        Button saveBtn = (Button) pane.lookupButton(saveType);
+        styleDialogButton(saveBtn, "primary");
         styleDialogButton((Button) pane.lookupButton(ButtonType.CANCEL), "ghost");
+
+        // Validate before closing
+        int[] parsed = new int[2];
+        saveBtn.addEventFilter(ActionEvent.ACTION, ev -> {
+            String problem = null;
+            int weekly = parseHours(weeklyField.getText());
+            int target = parseHours(targetField.getText());
+            LocalDate due = datePicker.getValue();
+
+            if (weekly < 0)                        problem = "Weekly goal must be a number of hours, like 5 or 1.5.";
+            else if (weekly > 7 * 24 * 60)         problem = "A week only has 168 hours.";
+            else if (target < 0)                   problem = "Target must be a number of hours, like 50.";
+            else if (target > 0 && due == null)    problem = "Pick a date for the target.";
+            else if (target == 0 && due != null)   problem = "Add how many hours you want to reach by that date.";
+            else if (due != null && due.isBefore(LocalDate.now())) problem = "The target date is in the past.";
+
+            if (problem != null) {
+                error.setText(problem);
+                error.setVisible(true);
+                error.setManaged(true);
+                dialog.getDialogPane().getScene().getWindow().sizeToScene();
+                ev.consume();
+            } else {
+                parsed[0] = weekly;
+                parsed[1] = target;
+            }
+        });
 
         Optional<ButtonType> result = dialog.showAndWait();
         if (result.isPresent() && result.get() == saveType) {
             subject.setTitle(titleField.getText().trim());
             subject.setNotes(notesArea.getText().trim());
             subjectController.updateSubject(subject.getId(), subject.getTitle(), subject.getNotes());
+
+            LocalDate due = datePicker.getValue();
+            subject.setWeeklyGoalMinutes(parsed[0]);
+            subject.setTargetMinutes(parsed[1]);
+            subject.setTargetDate(parsed[1] > 0 && due != null ? due.toString() : "");
+            subjectController.updateGoals(subject.getId(), subject.getWeeklyGoalMinutes(),
+                                          subject.getTargetMinutes(), subject.getTargetDate());
             renderRows();
         }
+    }
+
+    /** "" → 0 (no goal); "5" / "1.5" / "1,5" → minutes; invalid → -1. */
+    static int parseHours(String text) {
+        if (text == null || text.isBlank()) return 0;
+        String t = text.trim().toLowerCase().replace(',', '.').replace("h", "").trim();
+        try {
+            double h = Double.parseDouble(t);
+            if (h < 0 || h > 100_000 || Double.isNaN(h) || Double.isInfinite(h)) return -1;
+            return (int) Math.round(h * 60);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static String hoursText(int minutes) {
+        if (minutes <= 0) return "";
+        double h = minutes / 60.0;
+        return h == Math.floor(h) ? String.valueOf((long) h) : String.valueOf(Math.round(h * 100) / 100.0);
     }
 
     // ── Rows ──────────────────────────────────────────────────────────────────
@@ -238,25 +349,23 @@ public class SubjectsView extends VBox {
             return;
         }
 
+        Map<Integer, SubjectProgress> progress = new HashMap<>();
+        for (SubjectProgress p : progressController.getFor(List.copyOf(subjects))) {
+            progress.put(p.subject().getId(), p);
+        }
+
         for (int i = 0; i < n; i++) {
             if (i > 0) rowsBox.getChildren().add(divider());
-            rowsBox.getChildren().add(row(subjects.get(i)));
+            Subject s = subjects.get(i);
+            rowsBox.getChildren().add(row(s, progress.get(s.getId())));
         }
     }
 
-    private HBox row(Subject subject) {
-        // Initial badge
+    private HBox row(Subject subject, SubjectProgress p) {
         String name = subject.getName() == null ? "" : subject.getName().trim();
-        Label initial = label(14, FontWeight.SEMI_BOLD);
-        initial.setText(name.isEmpty() ? "?" : name.substring(0, 1).toUpperCase());
-        initial.setStyle("-fx-text-fill: " + ThemeManager.textAccent() + ";");
-        StackPane badge = new StackPane(initial);
-        badge.setMinSize(36, 36);
-        badge.setMaxSize(36, 36);
-        badge.setStyle(
-            "-fx-background-color: " + ThemeManager.heatLevel(1) + ";" +
-            "-fx-background-radius: 8;"
-        );
+
+        // Stage badge
+        StackPane badge = StageBadge.create(p.stage(), p.next(), p.totalSeconds(), 36);
 
         // Text
         Label nameLbl = label(14, FontWeight.SEMI_BOLD);
@@ -272,16 +381,25 @@ public class SubjectsView extends VBox {
 
         VBox info = new VBox(2, nameLbl, titleLbl);
 
+        String goals = goalSummary(subject);
         String notes = subject.getNotes() == null ? "" : subject.getNotes().trim();
-        if (!notes.isEmpty()) {
+        if (!goals.isEmpty()) {
+            Label g = label(12, FontWeight.NORMAL);
+            g.setText(goals);
+            g.setStyle("-fx-text-fill: " + ThemeManager.textAccent() + ";");
+            info.getChildren().add(g);
+        } else if (!notes.isEmpty()) {
             Label notesLbl = label(12, FontWeight.NORMAL);
             notesLbl.setText(notes.lines().findFirst().orElse(""));
-            notesLbl.setMaxWidth(520);
+            notesLbl.setMaxWidth(420);
             muted(notesLbl);
             info.getChildren().add(notesLbl);
         }
         info.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(info, Priority.ALWAYS);
+
+        // Evolution column
+        VBox evo = evolutionColumn(p);
 
         // Actions
         Button editBtn   = ghostButton("Edit", false);
@@ -289,7 +407,7 @@ public class SubjectsView extends VBox {
         editBtn  .setOnAction(e -> openEditDialog(subject));
         deleteBtn.setOnAction(e -> handleDelete(subject));
 
-        HBox row = new HBox(14, badge, info, editBtn, deleteBtn);
+        HBox row = new HBox(14, badge, info, evo, editBtn, deleteBtn);
         row.setAlignment(Pos.CENTER_LEFT);
         row.setPadding(new Insets(12, 8, 12, 8));
         String base = "-fx-background-radius: 8;";
@@ -297,6 +415,60 @@ public class SubjectsView extends VBox {
         row.setOnMouseEntered(e -> row.setStyle("-fx-background-color: " + ThemeManager.bgDarker() + ";" + base));
         row.setOnMouseExited (e -> row.setStyle("-fx-background-color: transparent;" + base));
         return row;
+    }
+
+    private VBox evolutionColumn(SubjectProgress p) {
+        Label stageLbl = label(12, FontWeight.SEMI_BOLD);
+        stageLbl.setText(p.stage().name());
+        primary(stageLbl);
+
+        Label totalLbl = label(12, FontWeight.NORMAL);
+        totalLbl.setText(fmt(p.totalSeconds()));
+        muted(totalLbl);
+
+        Region grow = new Region();
+        HBox.setHgrow(grow, Priority.ALWAYS);
+        HBox top = new HBox(6, stageLbl, grow, totalLbl);
+        top.setAlignment(Pos.BASELINE_LEFT);
+
+        Region track = new Region();
+        track.setPrefHeight(4);
+        track.setMaxHeight(4);
+        track.setMaxWidth(Double.MAX_VALUE);
+        track.setStyle("-fx-background-color: " + ThemeManager.heatLevel(0) + "; -fx-background-radius: 2;");
+        Region fill = new Region();
+        fill.setPrefHeight(4);
+        fill.setMaxHeight(4);
+        fill.maxWidthProperty().bind(track.widthProperty().multiply(p.stageProgress()));
+        fill.setStyle("-fx-background-color: " + ThemeManager.textAccent() + "; -fx-background-radius: 2;");
+        StackPane bar = new StackPane(track, fill);
+        bar.setAlignment(Pos.CENTER_LEFT);
+
+        Label nextLbl = label(11, FontWeight.NORMAL);
+        nextLbl.setText(p.next() == null
+            ? "Final stage"
+            : fmt(p.next().minSeconds() - p.totalSeconds()) + " to " + p.next().name());
+        muted(nextLbl);
+
+        VBox col = new VBox(5, top, bar, nextLbl);
+        col.setMinWidth(170);
+        col.setPrefWidth(170);
+        col.setMaxWidth(170);
+        col.setPadding(new Insets(0, 12, 0, 0));
+        return col;
+    }
+
+    private static String goalSummary(Subject s) {
+        StringBuilder sb = new StringBuilder();
+        if (s.hasWeeklyGoal()) sb.append(hoursText(s.getWeeklyGoalMinutes())).append("h per week");
+        if (s.hasTarget()) {
+            if (sb.length() > 0) sb.append("  ·  ");
+            String due = s.getTargetDate();
+            try { due = LocalDate.parse(due).format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)); }
+            catch (Exception ignored) { }
+            sb.append(hoursText(s.getTargetMinutes())).append("h by ").append(due);
+        }
+        return sb.toString();
     }
 
     private Button ghostButton(String text, boolean danger) {
@@ -425,8 +597,59 @@ public class SubjectsView extends VBox {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static String danger()     { return ThemeManager.isDark() ? "#E8836A" : "#C8553D"; }
-    private static String dangerSoft() { return ThemeManager.isDark() ? "#3A2620" : "#F8E6E1"; }
+    private static String danger()     { return ThemeManager.danger(); }
+    private static String dangerSoft() { return ThemeManager.dangerSoft(); }
+
+    private static String fmt(long seconds) {
+        return StudySessionController.formatSeconds(Math.max(0, seconds));
+    }
+
+    private static Label fieldLabel(String text) {
+        Label l = label(12, FontWeight.SEMI_BOLD);
+        l.setText(text);
+        muted(l);
+        return l;
+    }
+
+    private static Label mutedText(String text) {
+        Label l = label(13, FontWeight.NORMAL);
+        l.setText(text);
+        muted(l);
+        return l;
+    }
+
+    private void input(TextInputControl c) {
+        c.setFont(Font.font(ThemeManager.FONT, 13));
+        c.focusedProperty().addListener((o, was, is) -> styleInput(c));
+        styleInput(c);
+    }
+
+    private void styleDatePicker(DatePicker dp) {
+        String accent = ThemeManager.textAccent();
+        dp.setStyle(
+            "-fx-font-family: '" + ThemeManager.FONT + "';" +
+            "-fx-font-size: 13;" +
+            "-fx-base: " + ThemeManager.bgCard() + ";" +
+            "-fx-background: " + ThemeManager.bgCard() + ";" +
+            "-fx-control-inner-background: " + ThemeManager.bgInput() + ";" +
+            "-fx-text-base-color: " + ThemeManager.textPrimary() + ";" +
+            "-fx-mark-color: " + ThemeManager.textSecondary() + ";" +
+            "-fx-accent: " + accent + ";" +
+            "-fx-focus-color: " + accent + ";" +
+            "-fx-faint-focus-color: transparent;" +
+            "-fx-selection-bar: " + ThemeManager.heatLevel(2) + ";" +
+            "-fx-selection-bar-non-focused: " + ThemeManager.bgDarker() + ";" +
+            "-fx-background-color: " + ThemeManager.borderInput() + ", " + ThemeManager.bgInput() + ";" +
+            "-fx-background-insets: 0, 1;" +
+            "-fx-background-radius: 8, 7;"
+        );
+        styleInput(dp.getEditor());
+        dp.getEditor().setStyle(dp.getEditor().getStyle() + "-fx-background-color: transparent;");
+        dp.getEditor().focusedProperty().addListener((o, was, is) -> {
+            styleInput(dp.getEditor());
+            dp.getEditor().setStyle(dp.getEditor().getStyle() + "-fx-background-color: transparent;");
+        });
+    }
 
     private static Label label(double size, FontWeight weight) {
         Label l = new Label();

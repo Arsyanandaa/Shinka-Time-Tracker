@@ -23,6 +23,10 @@ public class SubjectController {
         DatabaseManager.updateSubject(id, title, notes);
     }
 
+    public void updateGoals(int id, int weeklyGoalMinutes, int targetMinutes, String targetDate) {
+        DatabaseManager.updateSubjectGoals(id, weeklyGoalMinutes, targetMinutes, targetDate);
+    }
+
     public List<Subject> getAllSubjects() {
         return DatabaseManager.getAllSubjects();
     }

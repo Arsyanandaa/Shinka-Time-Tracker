@@ -27,7 +27,10 @@ public class DatabaseManager {
             "  id    INTEGER PRIMARY KEY AUTOINCREMENT," +
             "  name  TEXT NOT NULL," +
             "  title TEXT DEFAULT ''," +
-            "  notes TEXT DEFAULT ''" +
+            "  notes TEXT DEFAULT ''," +
+            "  weekly_goal_minutes INTEGER DEFAULT 0," +
+            "  target_minutes      INTEGER DEFAULT 0," +
+            "  target_date         TEXT    DEFAULT ''" +
             ");";
 
         String createSessions =
@@ -45,6 +48,11 @@ public class DatabaseManager {
         String addTitleCol = "ALTER TABLE subjects ADD COLUMN title TEXT DEFAULT ''";
         String addNotesCol = "ALTER TABLE subjects ADD COLUMN notes TEXT DEFAULT ''";
 
+        // Migration: goals (weekly target, total target + date)
+        String addWeeklyCol     = "ALTER TABLE subjects ADD COLUMN weekly_goal_minutes INTEGER DEFAULT 0";
+        String addTargetMinCol  = "ALTER TABLE subjects ADD COLUMN target_minutes INTEGER DEFAULT 0";
+        String addTargetDateCol = "ALTER TABLE subjects ADD COLUMN target_date TEXT DEFAULT ''";
+
         try (Connection conn = connect();
              Statement  stmt = conn.createStatement()) {
             stmt.execute(createSubjects);
@@ -52,6 +60,9 @@ public class DatabaseManager {
             // Abaikan error kalau kolom sudah ada
             try { stmt.execute(addTitleCol); } catch (SQLException ignored) {}
             try { stmt.execute(addNotesCol); } catch (SQLException ignored) {}
+            try { stmt.execute(addWeeklyCol); }     catch (SQLException ignored) {}
+            try { stmt.execute(addTargetMinCol); }  catch (SQLException ignored) {}
+            try { stmt.execute(addTargetDateCol); } catch (SQLException ignored) {}
         } catch (SQLException e) {
             System.err.println("Error creating tables: " + e.getMessage());
         }
@@ -79,7 +90,8 @@ public class DatabaseManager {
 
     public static List<Subject> getAllSubjects() {
         List<Subject> list = new ArrayList<>();
-        String sql = "SELECT id, name, title, notes FROM subjects ORDER BY name";
+        String sql = "SELECT id, name, title, notes, weekly_goal_minutes, target_minutes, target_date" +
+                     "  FROM subjects ORDER BY name";
         try (Connection conn = connect();
              Statement  stmt = conn.createStatement();
              ResultSet  rs   = stmt.executeQuery(sql)) {
@@ -88,7 +100,10 @@ public class DatabaseManager {
                     rs.getInt   ("id"),
                     rs.getString("name"),
                     rs.getString("title"),
-                    rs.getString("notes")
+                    rs.getString("notes"),
+                    rs.getInt   ("weekly_goal_minutes"),
+                    rs.getInt   ("target_minutes"),
+                    rs.getString("target_date")
                 ));
             }
         } catch (SQLException e) {
@@ -107,6 +122,22 @@ public class DatabaseManager {
             ps.executeUpdate();
         } catch (SQLException e) {
             System.err.println("updateSubject error: " + e.getMessage());
+        }
+    }
+
+    public static void updateSubjectGoals(int id, int weeklyGoalMinutes,
+                                          int targetMinutes, String targetDate) {
+        String sql = "UPDATE subjects SET weekly_goal_minutes = ?, target_minutes = ?, target_date = ?" +
+                     " WHERE id = ?";
+        try (Connection conn = connect();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt   (1, weeklyGoalMinutes);
+            ps.setInt   (2, targetMinutes);
+            ps.setString(3, targetDate == null ? "" : targetDate);
+            ps.setInt   (4, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("updateSubjectGoals error: " + e.getMessage());
         }
     }
 

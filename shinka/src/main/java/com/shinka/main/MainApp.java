@@ -57,7 +57,11 @@ public class MainApp extends Application {
         dashboardView = new DashboardView(
             sessionController,
             heatmapController,
-            () -> switchTab(2)
+            () -> switchTab(2),
+            subjectId -> {
+                switchTab(2);
+                studySessionView.quickStart(subjectId);
+            }
         );
 
         studySessionView = new StudySessionView(

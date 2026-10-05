@@ -2,20 +2,29 @@ package com.shinka.ui;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.IntConsumer;
 
 import com.shinka.controller.HeatmapController;
+import com.shinka.controller.ProgressController;
+import com.shinka.controller.ProgressController.SubjectProgress;
 import com.shinka.controller.StreakController;
 import com.shinka.controller.StreakController.StreakInfo;
 import com.shinka.controller.StudySessionController;
+import com.shinka.model.StudySession;
 
 import javafx.geometry.HPos;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
+import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -31,29 +40,39 @@ public class DashboardView extends VBox {
 
     private static final DateTimeFormatter HEADER_DATE =
             DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.ENGLISH);
+    private static final DateTimeFormatter TARGET_DATE =
+            DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 
     private final StudySessionController sessionController;
     private final HeatmapController      heatmapController;
     private final Runnable               onStartStudy;
-    private final StreakController       streakController = new StreakController();
+    private final IntConsumer            onContinue;
+    private final StreakController       streakController   = new StreakController();
+    private final ProgressController     progressController = new ProgressController();
 
     // Header
     private Label   dateLabel, titleLabel;
-    private Button  startBtn;
+    private Button  continueBtn, newBtn;
     private SVGPath playIcon;
+    private int     continueSubjectId = -1;
 
     // Stats
-    private VBox    statsCard;
-    private Label   todayCaption, todayValue, todayHint;
-    private Label[] statCaptions = new Label[3];
-    private Label[] statValues   = new Label[3];
+    private VBox     statsCard;
+    private Label    todayCaption, todayValue, todayHint;
+    private Label[]  statCaptions = new Label[3];
+    private Label[]  statValues   = new Label[3];
     private Region[] statDividers = new Region[3];
 
     // Streak
-    private VBox      streakCard;
-    private Label     streakCaption, streakValue, streakBest, streakMessage, streakSub;
-    private Region    streakDivider;
-    private HBox      weekDots;
+    private VBox   streakCard;
+    private Label  streakCaption, streakValue, streakBest, streakMessage, streakSub;
+    private Region streakDivider;
+    private HBox   weekDots;
+
+    // Goals
+    private VBox  goalsCard;
+    private Label goalsTitle, goalsHint;
+    private VBox  goalsBody;
 
     // Activity
     private VBox        activityCard;
@@ -65,12 +84,21 @@ public class DashboardView extends VBox {
     private Label    subjectTitle, subjectTotal;
     private GridPane subjectGrid;
 
+    /** Old constructor kept for compatibility: "Continue" just opens the Study tab. */
     public DashboardView(StudySessionController sessionController,
                          HeatmapController heatmapController,
                          Runnable onStartStudy) {
+        this(sessionController, heatmapController, onStartStudy, id -> onStartStudy.run());
+    }
+
+    public DashboardView(StudySessionController sessionController,
+                         HeatmapController heatmapController,
+                         Runnable onStartStudy,
+                         IntConsumer onContinue) {
         this.sessionController = sessionController;
         this.heatmapController = heatmapController;
         this.onStartStudy      = onStartStudy;
+        this.onContinue        = onContinue;
         buildUI();
         applyTheme();
     }
@@ -86,6 +114,7 @@ public class DashboardView extends VBox {
             buildHeader(),
             buildStatsCard(),
             buildStreakCard(),
+            buildGoalsCard(),
             buildActivityCard(),
             buildSubjectCard()
         );
@@ -102,21 +131,30 @@ public class DashboardView extends VBox {
         playIcon = new SVGPath();
         playIcon.setContent("M0 0 L9 5.5 L0 11 Z");
 
-        startBtn = new Button("Start session", playIcon);
-        startBtn.setGraphicTextGap(10);
-        startBtn.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 13));
-        startBtn.setCursor(Cursor.HAND);
-        startBtn.setOnAction(e -> onStartStudy.run());
-        startBtn.setOnMouseEntered(e -> styleStartBtn(true));
-        startBtn.setOnMouseExited (e -> styleStartBtn(false));
+        continueBtn = new Button("Continue", playIcon);
+        continueBtn.setGraphicTextGap(10);
+        continueBtn.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 13));
+        continueBtn.setCursor(Cursor.HAND);
+        continueBtn.setOnAction(e -> {
+            if (continueSubjectId >= 0) onContinue.accept(continueSubjectId);
+            else onStartStudy.run();
+        });
+        continueBtn.setOnMouseEntered(e -> stylePrimary(continueBtn, true));
+        continueBtn.setOnMouseExited (e -> stylePrimary(continueBtn, false));
 
-        HBox header = new HBox(16, titles, startBtn);
+        newBtn = new Button("New session");
+        newBtn.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 13));
+        newBtn.setCursor(Cursor.HAND);
+        newBtn.setOnAction(e -> onStartStudy.run());
+        newBtn.setOnMouseEntered(e -> styleGhost(newBtn, true));
+        newBtn.setOnMouseExited (e -> styleGhost(newBtn, false));
+
+        HBox header = new HBox(10, titles, newBtn, continueBtn);
         header.setAlignment(Pos.BOTTOM_LEFT);
         return header;
     }
 
     private VBox buildStatsCard() {
-        // Hero: today
         todayCaption = label(12, FontWeight.NORMAL);
         todayCaption.setText("Today");
         todayValue   = label(38, FontWeight.SEMI_BOLD);
@@ -131,12 +169,7 @@ public class DashboardView extends VBox {
 
         String[] captions = {"This week", "This month", "All time"};
         for (int i = 0; i < 3; i++) {
-            statDividers[i] = new Region();
-            statDividers[i].setMinWidth(1);
-            statDividers[i].setMaxWidth(1);
-            statDividers[i].setPrefHeight(56);
-            statDividers[i].setMaxHeight(56);
-
+            statDividers[i] = vDivider(56);
             statCaptions[i] = label(12, FontWeight.NORMAL);
             statCaptions[i].setText(captions[i]);
             statValues[i]   = label(22, FontWeight.SEMI_BOLD);
@@ -164,11 +197,7 @@ public class DashboardView extends VBox {
         left.setMinWidth(170);
         left.setPadding(new Insets(0, 24, 0, 0));
 
-        streakDivider = new Region();
-        streakDivider.setMinWidth(1);
-        streakDivider.setMaxWidth(1);
-        streakDivider.setPrefHeight(64);
-        streakDivider.setMaxHeight(64);
+        streakDivider = vDivider(64);
 
         streakMessage = label(14, FontWeight.SEMI_BOLD);
         streakMessage.setWrapText(true);
@@ -192,6 +221,22 @@ public class DashboardView extends VBox {
         return streakCard;
     }
 
+    private VBox buildGoalsCard() {
+        goalsTitle = label(15, FontWeight.SEMI_BOLD);
+        goalsTitle.setText("Goals");
+        goalsHint = label(12, FontWeight.NORMAL);
+        goalsHint.setText("Weekly goals reset every Monday");
+
+        HBox head = new HBox(goalsTitle, spacer(), goalsHint);
+        head.setAlignment(Pos.BASELINE_LEFT);
+
+        goalsBody = new VBox(18);
+
+        goalsCard = new VBox(16, head, goalsBody);
+        goalsCard.setPadding(new Insets(22, 24, 24, 24));
+        return goalsCard;
+    }
+
     private VBox buildActivityCard() {
         activityTitle = label(15, FontWeight.SEMI_BOLD);
         activityTitle.setText("Activity");
@@ -213,25 +258,13 @@ public class DashboardView extends VBox {
 
         subjectGrid = new GridPane();
         subjectGrid.setHgap(16);
-        subjectGrid.setVgap(14);
-
-        ColumnConstraints name = new ColumnConstraints();
-        name.setMinWidth(150);
-        name.setPrefWidth(190);
-
-        ColumnConstraints bar = new ColumnConstraints();
-        bar.setHgrow(Priority.ALWAYS);
-        bar.setMinWidth(80);
-
-        ColumnConstraints time = new ColumnConstraints();
-        time.setMinWidth(72);
-        time.setHalignment(HPos.RIGHT);
-
-        ColumnConstraints pct = new ColumnConstraints();
-        pct.setMinWidth(40);
-        pct.setHalignment(HPos.RIGHT);
-
-        subjectGrid.getColumnConstraints().addAll(name, bar, time, pct);
+        subjectGrid.setVgap(12);
+        subjectGrid.getColumnConstraints().addAll(
+            col(150, 200, false, HPos.LEFT),
+            col(80, -1, true, HPos.LEFT),
+            col(72, -1, false, HPos.RIGHT),
+            col(40, -1, false, HPos.RIGHT)
+        );
 
         subjectCard = new VBox(18, head, subjectGrid);
         subjectCard.setPadding(new Insets(22, 24, 24, 24));
@@ -245,17 +278,10 @@ public class DashboardView extends VBox {
 
         muted(dateLabel);
         primary(titleLabel);
-        styleStartBtn(false);
 
-        statsCard   .setStyle(ThemeManager.cardStyle());
-        streakCard  .setStyle(ThemeManager.cardStyle());
-        streakDivider.setStyle("-fx-background-color: " + ThemeManager.border() + ";");
-        muted(streakCaption);
-        muted(streakBest);
-        primary(streakMessage);
-        muted(streakSub);
-        activityCard.setStyle(ThemeManager.cardStyle());
-        subjectCard .setStyle(ThemeManager.cardStyle());
+        for (VBox card : new VBox[] {statsCard, streakCard, goalsCard, activityCard, subjectCard}) {
+            card.setStyle(ThemeManager.cardStyle());
+        }
 
         muted(todayCaption);
         primary(todayValue);
@@ -266,6 +292,14 @@ public class DashboardView extends VBox {
             statDividers[i].setStyle("-fx-background-color: " + ThemeManager.border() + ";");
         }
 
+        streakDivider.setStyle("-fx-background-color: " + ThemeManager.border() + ";");
+        muted(streakCaption);
+        muted(streakBest);
+        primary(streakMessage);
+        muted(streakSub);
+
+        primary(goalsTitle);
+        muted(goalsHint);
         primary(activityTitle);
         primary(subjectTitle);
         muted(subjectTotal);
@@ -273,15 +307,26 @@ public class DashboardView extends VBox {
         refresh();
     }
 
-    private void styleStartBtn(boolean hover) {
+    private void stylePrimary(Button b, boolean hover) {
         String bg = hover ? ThemeManager.btnPrimaryHover() : ThemeManager.btnPrimaryBg();
-        startBtn.setStyle(
+        b.setStyle(
             "-fx-background-color: " + bg + ";" +
             "-fx-text-fill: " + ThemeManager.btnPrimaryFg() + ";" +
             "-fx-background-radius: 8;" +
             "-fx-padding: 10 18 10 16;"
         );
-        playIcon.setStyle("-fx-fill: " + ThemeManager.btnPrimaryFg() + ";");
+        if (b == continueBtn) playIcon.setStyle("-fx-fill: " + ThemeManager.btnPrimaryFg() + ";");
+    }
+
+    private void styleGhost(Button b, boolean hover) {
+        b.setStyle(
+            "-fx-background-color: " + (hover ? ThemeManager.bgDarker() : "transparent") + ";" +
+            "-fx-text-fill: " + ThemeManager.textPrimary() + ";" +
+            "-fx-border-color: " + ThemeManager.border() + ";" +
+            "-fx-border-radius: 8;" +
+            "-fx-background-radius: 8;" +
+            "-fx-padding: 9 16;"
+        );
     }
 
     // ── Data ──────────────────────────────────────────────────────────────────
@@ -307,10 +352,39 @@ public class DashboardView extends VBox {
         statValues[1].setText(fmt(monthSec));
         statValues[2].setText(fmt(totalSec));
 
-        buildSubjectRows(totalSec);
+        List<SubjectProgress> progress = progressController.getAll();
+
+        renderHeaderButtons(progress);
         renderStreak(streakController.getStreak());
+        renderGoals(progress);
+        renderSubjects(progress, totalSec);
 
         if (heatmapView != null) heatmapView.refresh();
+    }
+
+    // ── Continue button ───────────────────────────────────────────────────────
+
+    private void renderHeaderButtons(List<SubjectProgress> progress) {
+        continueSubjectId = -1;
+        String name = null;
+
+        Optional<StudySession> last = progressController.getLastSession();
+        if (last.isPresent()) {
+            int id = last.get().getSubjectId();
+            for (SubjectProgress p : progress) {
+                if (p.subject().getId() == id) { continueSubjectId = id; name = p.subject().getName(); break; }
+            }
+        }
+
+        boolean canContinue = continueSubjectId >= 0;
+        continueBtn.setText(canContinue ? "Continue " + name : "Start session");
+        continueBtn.setTooltip(canContinue ? new Tooltip("Start the timer for " + name + " right away") : null);
+        continueBtn.setMaxWidth(320);
+        newBtn.setVisible(canContinue);
+        newBtn.setManaged(canContinue);
+
+        stylePrimary(continueBtn, false);
+        styleGhost(newBtn, false);
     }
 
     // ── Streak ────────────────────────────────────────────────────────────────
@@ -355,7 +429,6 @@ public class DashboardView extends VBox {
         streakMessage.setText(msg);
         streakSub.setText(sub);
 
-        // Mon..Sun dots
         weekDots.getChildren().clear();
         String[] letters = {"M", "T", "W", "T", "F", "S", "S"};
         for (int i = 0; i < 7; i++) {
@@ -381,13 +454,117 @@ public class DashboardView extends VBox {
             day.setStyle("-fx-text-fill: " +
                 (isToday ? ThemeManager.textPrimary() : ThemeManager.textSecondary()) + ";");
 
-            VBox col = new VBox(5, dot, day);
-            col.setAlignment(Pos.CENTER);
-            weekDots.getChildren().add(col);
+            VBox colBox = new VBox(5, dot, day);
+            colBox.setAlignment(Pos.CENTER);
+            weekDots.getChildren().add(colBox);
         }
     }
 
-    private void buildSubjectRows(int totalSec) {
+    // ── Goals: weekly + targets ───────────────────────────────────────────────
+
+    private void renderGoals(List<SubjectProgress> progress) {
+        goalsBody.getChildren().clear();
+
+        List<SubjectProgress> weekly  = progress.stream().filter(p -> p.subject().hasWeeklyGoal()).toList();
+        List<SubjectProgress> targets = progress.stream().filter(p -> p.subject().hasTarget()).toList();
+
+        if (weekly.isEmpty() && targets.isEmpty()) {
+            Label empty = label(13, FontWeight.NORMAL);
+            empty.setText("No goals yet. Open Subjects, click Edit on a subject, and set a weekly goal or a target date.");
+            empty.setWrapText(true);
+            muted(empty);
+            goalsBody.getChildren().add(empty);
+            return;
+        }
+
+        if (!weekly.isEmpty()) {
+            GridPane g = goalGrid();
+            int r = 0;
+            for (SubjectProgress p : weekly) {
+                long goal = p.weeklyGoalSeconds();
+                g.add(nameCell(p, 22), 0, r);
+                g.add(bar((double) p.weekSeconds() / goal, p.weeklyDone()), 1, r);
+                g.add(valueLabel(fmt(p.weekSeconds()) + " of " + fmt(goal)), 2, r);
+                g.add(p.weeklyDone()
+                        ? statusLabel("Done", ThemeManager.textAccent())
+                        : statusLabel(fmt(goal - p.weekSeconds()) + " left", ThemeManager.textSecondary()), 3, r);
+                r++;
+            }
+            goalsBody.getChildren().add(section("This week", g));
+        }
+
+        if (!targets.isEmpty()) {
+            GridPane g = goalGrid();
+            int r = 0;
+            for (SubjectProgress p : targets) {
+                long target = p.targetSeconds();
+                boolean reached = p.targetStatus() == ProgressController.TargetStatus.REACHED;
+
+                g.add(nameCell(p, 22), 0, r);
+                g.add(bar((double) p.totalSeconds() / target, reached), 1, r);
+                g.add(valueLabel(fmt(p.totalSeconds()) + " of " + fmt(target)), 2, r);
+                g.add(targetStatusLabel(p), 3, r);
+                r++;
+
+                Label detail = label(12, FontWeight.NORMAL);
+                detail.setText(targetDetail(p));
+                detail.setWrapText(true);
+                muted(detail);
+                GridPane.setMargin(detail, new Insets(-6, 0, 4, 0));
+                g.add(detail, 1, r, 3, 1);
+                r++;
+            }
+            goalsBody.getChildren().add(section("Targets", g));
+        }
+    }
+
+    private String targetDetail(SubjectProgress p) {
+        String due = p.subject().getTargetDate();
+        try { due = LocalDate.parse(due).format(TARGET_DATE); } catch (Exception ignored) { }
+
+        return switch (p.targetStatus()) {
+            case REACHED  -> "Target of " + fmt(p.targetSeconds()) + " reached. Set a new one in Subjects.";
+            case OVERDUE  -> "Due " + due + " · " + fmt(p.remainingSeconds()) + " still to go. Pick a new date in Subjects.";
+            case ON_TRACK, BEHIND -> "Due " + due + " · " + p.daysLeft() + (p.daysLeft() == 1 ? " day" : " days") + " left · " +
+                "need " + pace(p.neededPerDay()) + "/day, your last " + ProgressController.PACE_WINDOW_DAYS +
+                " days averaged " + pace(p.recentPerDay()) + "/day";
+            default -> "";
+        };
+    }
+
+    private Label targetStatusLabel(SubjectProgress p) {
+        return switch (p.targetStatus()) {
+            case ON_TRACK -> statusLabel("On track", ThemeManager.textAccent());
+            case BEHIND   -> statusLabel("Behind",   ThemeManager.warning());
+            case REACHED  -> statusLabel("Reached",  ThemeManager.textAccent());
+            case OVERDUE  -> statusLabel("Overdue",  ThemeManager.danger());
+            default       -> statusLabel("", ThemeManager.textSecondary());
+        };
+    }
+
+    private VBox section(String title, Node content) {
+        Label t = label(12, FontWeight.SEMI_BOLD);
+        t.setText(title);
+        muted(t);
+        return new VBox(10, t, content);
+    }
+
+    private GridPane goalGrid() {
+        GridPane g = new GridPane();
+        g.setHgap(16);
+        g.setVgap(12);
+        g.getColumnConstraints().addAll(
+            col(150, 200, false, HPos.LEFT),
+            col(80, -1, true, HPos.LEFT),
+            col(120, -1, false, HPos.RIGHT),
+            col(80, -1, false, HPos.RIGHT)
+        );
+        return g;
+    }
+
+    // ── By subject ────────────────────────────────────────────────────────────
+
+    private void renderSubjects(List<SubjectProgress> progress, int totalSec) {
         subjectGrid.getChildren().clear();
         Map<String, Integer> perSubject = sessionController.getSecondsPerSubject();
 
@@ -401,6 +578,9 @@ public class DashboardView extends VBox {
             return;
         }
 
+        Map<String, SubjectProgress> byName = new HashMap<>();
+        for (SubjectProgress p : progress) byName.putIfAbsent(p.subject().getName(), p);
+
         subjectTotal.setText(perSubject.size() + " subject" + (perSubject.size() != 1 ? "s" : ""));
 
         int max = perSubject.values().stream().mapToInt(Integer::intValue).max().orElse(1);
@@ -408,29 +588,46 @@ public class DashboardView extends VBox {
 
         for (Map.Entry<String, Integer> entry : perSubject.entrySet()) {
             int sec = entry.getValue();
+            SubjectProgress p = byName.get(entry.getKey());
 
-            Label name = label(13, FontWeight.NORMAL);
-            name.setText(entry.getKey());
-            name.setMaxWidth(190);
-            primary(name);
-
-            Label time = label(13, FontWeight.SEMI_BOLD);
-            time.setText(fmt(sec));
-            primary(time);
+            Node nameNode;
+            if (p != null) {
+                nameNode = nameCell(p, 22);
+            } else {
+                Label name = label(13, FontWeight.NORMAL);
+                name.setText(entry.getKey());
+                primary(name);
+                nameNode = name;
+            }
 
             Label pct = label(12, FontWeight.NORMAL);
             pct.setText(totalSec > 0 ? Math.round(sec * 100.0 / totalSec) + "%" : "–");
             muted(pct);
 
-            subjectGrid.add(name, 0, row);
-            subjectGrid.add(bar(max > 0 ? (double) sec / max : 0), 1, row);
-            subjectGrid.add(time, 2, row);
-            subjectGrid.add(pct,  3, row);
+            subjectGrid.add(nameNode, 0, row);
+            subjectGrid.add(bar(max > 0 ? (double) sec / max : 0, false), 1, row);
+            subjectGrid.add(valueLabel(fmt(sec)), 2, row);
+            subjectGrid.add(pct, 3, row);
             row++;
         }
     }
 
-    private StackPane bar(double ratio) {
+    // ── Shared pieces ─────────────────────────────────────────────────────────
+
+    private HBox nameCell(SubjectProgress p, double badgeSize) {
+        StackPane badge = StageBadge.create(p.stage(), p.next(), p.totalSeconds(), badgeSize);
+        Label name = label(13, FontWeight.NORMAL);
+        name.setText(p.subject().getName());
+        name.setMaxWidth(160);
+        primary(name);
+        HBox box = new HBox(10, badge, name);
+        box.setAlignment(Pos.CENTER_LEFT);
+        return box;
+    }
+
+    private StackPane bar(double ratio, boolean complete) {
+        double r = Math.max(0, Math.min(1, ratio));
+
         Region track = new Region();
         track.setPrefHeight(6);
         track.setMaxHeight(6);
@@ -443,11 +640,12 @@ public class DashboardView extends VBox {
         Region fill = new Region();
         fill.setPrefHeight(6);
         fill.setMaxHeight(6);
-        fill.setMinWidth(6);
-        fill.maxWidthProperty().bind(track.widthProperty().multiply(ratio));
+        fill.setMinWidth(r > 0 ? 6 : 0);
+        fill.maxWidthProperty().bind(track.widthProperty().multiply(r));
         fill.setStyle(
-            "-fx-background-color: " + ThemeManager.textAccent() + ";" +
-            "-fx-background-radius: 3;"
+            "-fx-background-color: " + (complete ? ThemeManager.btnPrimaryBg() : ThemeManager.textAccent()) + ";" +
+            "-fx-background-radius: 3;" +
+            (r > 0 ? "" : "-fx-opacity: 0;")
         );
 
         StackPane bar = new StackPane(track, fill);
@@ -456,10 +654,46 @@ public class DashboardView extends VBox {
         return bar;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    private Label valueLabel(String text) {
+        Label l = label(13, FontWeight.SEMI_BOLD);
+        l.setText(text);
+        primary(l);
+        return l;
+    }
+
+    private Label statusLabel(String text, String color) {
+        Label l = label(12, FontWeight.SEMI_BOLD);
+        l.setText(text);
+        l.setStyle("-fx-text-fill: " + color + ";");
+        return l;
+    }
+
+    private static ColumnConstraints col(double min, double pref, boolean grow, HPos align) {
+        ColumnConstraints c = new ColumnConstraints();
+        c.setMinWidth(min);
+        if (pref > 0) c.setPrefWidth(pref);
+        if (grow) c.setHgrow(Priority.ALWAYS);
+        c.setHalignment(align);
+        return c;
+    }
+
+    private static Region vDivider(double height) {
+        Region d = new Region();
+        d.setMinWidth(1);
+        d.setMaxWidth(1);
+        d.setPrefHeight(height);
+        d.setMaxHeight(height);
+        return d;
+    }
 
     private static String fmt(long seconds) {
-        return StudySessionController.formatSeconds(seconds);
+        return seconds <= 0 ? "0m" : StudySessionController.formatSeconds(seconds);
+    }
+
+    /** Pace values rounded up to whole minutes ("41m/day", not "40m 37s/day"). */
+    private static String pace(long secondsPerDay) {
+        if (secondsPerDay <= 0) return "0m";
+        return StudySessionController.formatSeconds((long) Math.ceil(secondsPerDay / 60.0) * 60);
     }
 
     private static Label label(double size, FontWeight weight) {
