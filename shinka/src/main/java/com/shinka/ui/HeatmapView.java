@@ -4,8 +4,13 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 import com.shinka.controller.HeatmapController;
 import com.shinka.controller.StudySessionController;
@@ -21,36 +26,42 @@ import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
+import javafx.util.Duration;
 
+/**
+ * Year heatmap of study activity.
+ * Transparent background: the parent card provides the surface.
+ */
 public class HeatmapView extends VBox {
 
-    private static final int CELL_SIZE = 11;
+    private static final int CELL_SIZE = 12;
     private static final int CELL_GAP  = 3;
     private static final int WEEKS     = 53;
 
-    private static final String BG_COLOR     = "#161b22";
-    private static final String BORDER_COLOR = "#30363d";
-    private static final Color  COLOR_EMPTY  = Color.web("#21262d");
-    private static final Color  COLOR_ACTIVE = Color.web("#39d353"); // 1 warna hijau terang
-
-    private final HeatmapController heatmapController;
-    private GridPane grid;
-    private VBox     detailPanel;
-    private Label    contributionCountLabel;
-
-    // ── Year state
-    private int selectedYear = LocalDate.now().getYear();
-    private HBox yearButtonBar;
+    // Level thresholds in seconds: <30m, <1h, <2h, >=2h
+    private static final long[] THRESHOLDS = { 30 * 60, 60 * 60, 2 * 60 * 60 };
 
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DISPLAY_FMT =
-            DateTimeFormatter.ofPattern("dd MMMM yyyy", Locale.ENGLISH);
+            DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.ENGLISH);
+
+    private final HeatmapController heatmapController;
+
+    private Label    countLabel;
+    private HBox     yearButtonBar;
+    private GridPane grid;
+    private HBox     legend;
+    private VBox     detailPanel;
+
+    private int       selectedYear = LocalDate.now().getYear();
+    private LocalDate selectedDate = null;
 
     public HeatmapView(HeatmapController heatmapController) {
         this.heatmapController = heatmapController;
@@ -60,368 +71,321 @@ public class HeatmapView extends VBox {
 
     private void buildUI() {
         setSpacing(0);
-        setPadding(new Insets(0));
-        setStyle(
-            "-fx-background-color: " + BG_COLOR + ";" +
-            "-fx-background-radius: 8;" +
-            "-fx-border-color: " + BORDER_COLOR + ";" +
-            "-fx-border-radius: 8;" +
-            "-fx-border-width: 1;"
-        );
+        setStyle("-fx-background-color: transparent;");
 
-        // ── Top bar: count + year switcher
-        contributionCountLabel = new Label("");
-        contributionCountLabel.setStyle(
-            "-fx-text-fill: #e6edf3;" +
-            "-fx-font-size: 13;" +
-            "-fx-font-weight: bold;"
-        );
+        countLabel = new Label();
+        countLabel.setFont(Font.font(ThemeManager.FONT, FontWeight.NORMAL, 12));
 
-        yearButtonBar = new HBox(6);
+        yearButtonBar = new HBox(4);
         yearButtonBar.setAlignment(Pos.CENTER_RIGHT);
         HBox.setHgrow(yearButtonBar, Priority.ALWAYS);
 
-        HBox topBar = new HBox(12, contributionCountLabel, yearButtonBar);
-        topBar.setPadding(new Insets(14, 16, 10, 16));
+        HBox topBar = new HBox(12, countLabel, yearButtonBar);
         topBar.setAlignment(Pos.CENTER_LEFT);
+        topBar.setPadding(new Insets(0, 0, 16, 0));
 
-        // ── Grid
         grid = new GridPane();
         grid.setHgap(CELL_GAP);
         grid.setVgap(CELL_GAP);
 
-        HBox gridWrapper = new HBox(grid);
-        gridWrapper.setPadding(new Insets(4, 16, 8, 16));
+        legend = new HBox(4);
+        legend.setAlignment(Pos.CENTER_RIGHT);
+        legend.setPadding(new Insets(14, 0, 0, 0));
 
-        // ── Legend
-        HBox legendBar = new HBox(buildLegend());
-        legendBar.setPadding(new Insets(6, 16, 12, 16));
-        legendBar.setAlignment(Pos.CENTER_RIGHT);
-
-        // ── Detail panel
-        detailPanel = new VBox(6);
-        detailPanel.setPadding(new Insets(12, 16, 12, 16));
-        detailPanel.setStyle(
-            "-fx-background-color: #21262d;" +
-            "-fx-border-color: " + BORDER_COLOR + ";" +
-            "-fx-border-width: 1 0 0 0;"
-        );
+        detailPanel = new VBox(8);
         detailPanel.setVisible(false);
         detailPanel.setManaged(false);
 
-        getChildren().addAll(topBar, gridWrapper, legendBar, detailPanel);
+        getChildren().addAll(topBar, grid, legend, detailPanel);
     }
 
+    // ── Render ────────────────────────────────────────────────────────────────
+
     public void refresh() {
-        grid.getChildren().clear();
-
-        // ── Rebuild year buttons (realtime: years that have data)
-        rebuildYearButtons();
-
         Map<String, StudyDaySummary> summaryMap = heatmapController.getYearSummary();
 
-        // Filter only selected year
-        LocalDate today     = LocalDate.now();
-        int       year      = selectedYear;
-        LocalDate yearStart = LocalDate.of(year, 1, 1).with(DayOfWeek.MONDAY);
-        LocalDate yearEnd   = LocalDate.of(year, 12, 31);
+        countLabel.setStyle("-fx-text-fill: " + ThemeManager.textSecondary() + ";");
+        rebuildYearButtons(summaryMap);
+        rebuildLegend();
+        rebuildGrid(summaryMap);
 
-        // If selected year is current year, end at today
-        if (year == today.getYear()) {
-            yearEnd = today;
+        if (selectedDate != null && selectedDate.getYear() == selectedYear) {
+            showDetail(selectedDate, summaryMap.get(selectedDate.format(DATE_FMT)));
+        } else {
+            hideDetail();
         }
+    }
 
-        // Count sessions in selected year
-        int totalSessions = 0;
-        for (Map.Entry<String, StudyDaySummary> entry : summaryMap.entrySet()) {
-            String dateStr = entry.getKey();
-            if (dateStr.startsWith(year + "")) {
-                totalSessions += entry.getValue().getSessions().size();
+    private void rebuildGrid(Map<String, StudyDaySummary> summaryMap) {
+        grid.getChildren().clear();
+
+        int       year  = selectedYear;
+        LocalDate today = LocalDate.now();
+
+        int sessions = 0;
+        long seconds = 0;
+        for (Map.Entry<String, StudyDaySummary> e : summaryMap.entrySet()) {
+            if (e.getKey().startsWith(year + "-")) {
+                sessions += e.getValue().getSessions().size();
+                seconds  += e.getValue().getTotalSeconds();
             }
         }
-        contributionCountLabel.setText(
-            totalSessions + " study session" + (totalSessions != 1 ? "s" : "") +
-            " in " + year
-        );
+        countLabel.setText(sessions == 0
+            ? "No sessions in " + year
+            : sessions + " session" + (sessions != 1 ? "s" : "") +
+              " · " + StudySessionController.formatSeconds(seconds) + " in " + year);
 
-        // ── Day-of-week labels
+        // Day labels
         String[] dayLabels = {"Mon", "", "Wed", "", "Fri", "", "Sun"};
         for (int row = 0; row < 7; row++) {
-            Label lbl = new Label(dayLabels[row]);
-            lbl.setStyle("-fx-font-size: 9; -fx-text-fill: #7d8590;");
-            lbl.setMinWidth(26);
-            lbl.setAlignment(Pos.CENTER_RIGHT);
+            Label lbl = smallMuted(dayLabels[row]);
+            lbl.setMinWidth(28);
             grid.add(lbl, 0, row + 1);
         }
 
-        // ── Month labels + cells
         LocalDate startDate = LocalDate.of(year, 1, 1).with(DayOfWeek.MONDAY);
         int lastMonth = -1;
 
         for (int week = 0; week < WEEKS; week++) {
             LocalDate weekStart = startDate.plusWeeks(week);
 
-            // Month label
-            int month = weekStart.getMonthValue();
-            if (month != lastMonth && weekStart.getYear() == year) {
-                Label monthLbl = new Label(
-                    weekStart.getMonth().getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
-                );
-                monthLbl.setStyle("-fx-font-size: 9; -fx-text-fill: #7d8590;");
-                grid.add(monthLbl, week + 1, 0);
+            // Month label on the first week that contains the 1st..7th of a month
+            LocalDate labelDay = weekStart.plusDays(6);
+            int month = labelDay.getMonthValue();
+            if (month != lastMonth && labelDay.getYear() == year) {
+                Label m = smallMuted(labelDay.getMonth().getDisplayName(TextStyle.SHORT, Locale.ENGLISH));
+                m.setMinWidth(Region.USE_PREF_SIZE);
+                grid.add(m, week + 1, 0, 3, 1);
                 lastMonth = month;
             }
 
             for (int dow = 0; dow < 7; dow++) {
-                LocalDate cellDate = weekStart.plusDays(dow);
-
-                // Only show current year
-                if (cellDate.getYear() != year) {
-                    Rectangle ph = new Rectangle(CELL_SIZE, CELL_SIZE);
-                    ph.setFill(Color.TRANSPARENT);
-                    grid.add(ph, week + 1, dow + 1);
-                    continue;
-                }
-
-                // Skip future dates
-                if (cellDate.isAfter(today)) {
-                    Rectangle ph = new Rectangle(CELL_SIZE, CELL_SIZE);
-                    ph.setFill(Color.TRANSPARENT);
-                    grid.add(ph, week + 1, dow + 1);
-                    continue;
-                }
-
-                String          dateStr = cellDate.format(DATE_FMT);
-                StudyDaySummary summary = summaryMap.get(dateStr);
-
-                // 1 warna: abu kalau tidak belajar, hijau terang kalau belajar
-                Color cellColor = (summary != null) ? COLOR_ACTIVE : COLOR_EMPTY;
-
+                LocalDate date = weekStart.plusDays(dow);
                 Rectangle cell = new Rectangle(CELL_SIZE, CELL_SIZE);
-                cell.setFill(cellColor);
-                cell.setArcWidth(2);
-                cell.setArcHeight(2);
+                cell.setArcWidth(4);
+                cell.setArcHeight(4);
+
+                if (date.getYear() != year) {
+                    cell.setFill(Color.TRANSPARENT);
+                    grid.add(cell, week + 1, dow + 1);
+                    continue;
+                }
+
+                // Future days: faint placeholder so the year keeps its shape
+                if (date.isAfter(today)) {
+                    cell.setFill(Color.web(ThemeManager.heatLevel(0)));
+                    cell.setOpacity(0.4);
+                    grid.add(cell, week + 1, dow + 1);
+                    continue;
+                }
+
+                StudyDaySummary summary = summaryMap.get(date.format(DATE_FMT));
+                long sec = summary == null ? 0 : summary.getTotalSeconds();
+                cell.setFill(Color.web(ThemeManager.heatLevel(level(sec))));
                 cell.setCursor(Cursor.HAND);
 
-                // Highlight today
-                if (cellDate.equals(today)) {
-                    cell.setStroke(Color.web("#58a6ff"));
-                    cell.setStrokeWidth(1.5);
+                if (date.equals(today) || date.equals(selectedDate)) {
+                    cell.setStroke(Color.web(ThemeManager.textPrimary()));
+                    cell.setStrokeWidth(1.2);
+                    cell.setStrokeType(javafx.scene.shape.StrokeType.INSIDE);
                 }
 
-                // Tooltip
-                Tooltip tip = new Tooltip(buildTooltip(cellDate, summary));
+                Tooltip tip = new Tooltip(tooltipText(date, summary));
+                tip.setShowDelay(Duration.millis(120));
                 tip.setStyle(
+                    "-fx-font-family: '" + ThemeManager.FONT + "';" +
                     "-fx-font-size: 11;" +
-                    "-fx-background-color: #1c2128;" +
-                    "-fx-text-fill: #e6edf3;" +
-                    "-fx-border-color: #30363d;" +
-                    "-fx-border-width: 1;"
+                    "-fx-background-color: " + ThemeManager.textPrimary() + ";" +
+                    "-fx-text-fill: " + ThemeManager.bgMain() + ";" +
+                    "-fx-background-radius: 6;" +
+                    "-fx-padding: 6 10;"
                 );
                 Tooltip.install(cell, tip);
 
-                final LocalDate       fd = cellDate;
-                final StudyDaySummary fs = summary;
-                cell.setOnMouseClicked(e -> showDetail(fd, fs));
-                cell.setOnMouseEntered(e -> cell.setOpacity(0.7));
+                cell.setOnMouseEntered(e -> cell.setOpacity(0.75));
                 cell.setOnMouseExited (e -> cell.setOpacity(1.0));
+                cell.setOnMouseClicked(e -> {
+                    selectedDate = date.equals(selectedDate) ? null : date;
+                    refresh();
+                });
 
                 grid.add(cell, week + 1, dow + 1);
             }
         }
     }
 
-    // ── Year buttons ──────────────────────────────────────────────────────────
+    private static int level(long seconds) {
+        if (seconds <= 0)              return 0;
+        if (seconds < THRESHOLDS[0])   return 1;
+        if (seconds < THRESHOLDS[1])   return 2;
+        if (seconds < THRESHOLDS[2])   return 3;
+        return 4;
+    }
 
-    private void rebuildYearButtons() {
+    // ── Year switcher ─────────────────────────────────────────────────────────
+
+    private void rebuildYearButtons(Map<String, StudyDaySummary> summaryMap) {
         yearButtonBar.getChildren().clear();
 
-        Map<String, StudyDaySummary> summaryMap = heatmapController.getYearSummary();
-        int currentYear = LocalDate.now().getYear();
-
-        // Collect years that have data + always include current year
-        java.util.Set<Integer> years = new java.util.TreeSet<>();
-        years.add(currentYear);
+        Set<Integer> years = new TreeSet<>();
+        years.add(LocalDate.now().getYear());
         for (String date : summaryMap.keySet()) {
-            try {
-                years.add(Integer.parseInt(date.substring(0, 4)));
-            } catch (Exception ignored) {}
+            try { years.add(Integer.parseInt(date.substring(0, 4))); }
+            catch (Exception ignored) {}
         }
 
-        // Show buttons newest first
-        java.util.List<Integer> sortedYears = new java.util.ArrayList<>(years);
-        java.util.Collections.sort(sortedYears, java.util.Collections.reverseOrder());
+        // Only show the switcher when there is more than one year
+        if (years.size() < 2) return;
 
-        for (int y : sortedYears) {
-            Button btn = yearButton(y);
-            yearButtonBar.getChildren().add(btn);
-        }
+        List<Integer> sorted = new ArrayList<>(years);
+        Collections.sort(sorted, Collections.reverseOrder());
+        for (int y : sorted) yearButtonBar.getChildren().add(yearButton(y));
     }
 
     private Button yearButton(int year) {
         Button btn = new Button(String.valueOf(year));
-        btn.setFont(Font.font("System", FontWeight.BOLD, 11));
+        btn.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 11));
+        btn.setCursor(Cursor.HAND);
+        styleYearButton(btn, year == selectedYear, false);
 
-        boolean isSelected = (year == selectedYear);
-        btn.setStyle(
-            isSelected
-            ? "-fx-background-color: #1f6feb;" +
-              "-fx-text-fill: white;" +
-              "-fx-background-radius: 6;" +
-              "-fx-padding: 3 10;" +
-              "-fx-cursor: hand;"
-            : "-fx-background-color: transparent;" +
-              "-fx-text-fill: #7d8590;" +
-              "-fx-background-radius: 6;" +
-              "-fx-border-color: #30363d;" +
-              "-fx-border-radius: 6;" +
-              "-fx-border-width: 1;" +
-              "-fx-padding: 3 10;" +
-              "-fx-cursor: hand;"
-        );
-
-        btn.setOnMouseEntered(e -> {
-            if (year != selectedYear) {
-                btn.setStyle(
-                    "-fx-background-color: #21262d;" +
-                    "-fx-text-fill: #e6edf3;" +
-                    "-fx-background-radius: 6;" +
-                    "-fx-border-color: #58a6ff;" +
-                    "-fx-border-radius: 6;" +
-                    "-fx-border-width: 1;" +
-                    "-fx-padding: 3 10;" +
-                    "-fx-cursor: hand;"
-                );
-            }
-        });
-        btn.setOnMouseExited(e -> {
-            if (year != selectedYear) {
-                btn.setStyle(
-                    "-fx-background-color: transparent;" +
-                    "-fx-text-fill: #7d8590;" +
-                    "-fx-background-radius: 6;" +
-                    "-fx-border-color: #30363d;" +
-                    "-fx-border-radius: 6;" +
-                    "-fx-border-width: 1;" +
-                    "-fx-padding: 3 10;" +
-                    "-fx-cursor: hand;"
-                );
-            }
-        });
-
+        btn.setOnMouseEntered(e -> styleYearButton(btn, year == selectedYear, true));
+        btn.setOnMouseExited (e -> styleYearButton(btn, year == selectedYear, false));
         btn.setOnAction(e -> {
             selectedYear = year;
-            detailPanel.setVisible(false);
-            detailPanel.setManaged(false);
+            selectedDate = null;
             refresh();
         });
-
         return btn;
     }
 
-    // ── Detail panel ──────────────────────────────────────────────────────────
+    private void styleYearButton(Button btn, boolean selected, boolean hover) {
+        String bg = selected || hover ? ThemeManager.bgDarker() : "transparent";
+        String fg = selected ? ThemeManager.textPrimary() : ThemeManager.textSecondary();
+        btn.setStyle(
+            "-fx-background-color: " + bg + ";" +
+            "-fx-text-fill: " + fg + ";" +
+            "-fx-background-radius: 6;" +
+            "-fx-padding: 4 10;"
+        );
+    }
+
+    // ── Legend ────────────────────────────────────────────────────────────────
+
+    private void rebuildLegend() {
+        legend.getChildren().clear();
+        Label less = smallMuted("Less");
+        less.setPadding(new Insets(0, 4, 0, 0));
+        legend.getChildren().add(less);
+        for (int i = 0; i <= 4; i++) {
+            Rectangle r = new Rectangle(CELL_SIZE, CELL_SIZE);
+            r.setArcWidth(4);
+            r.setArcHeight(4);
+            r.setFill(Color.web(ThemeManager.heatLevel(i)));
+            legend.getChildren().add(r);
+        }
+        Label more = smallMuted("More");
+        more.setPadding(new Insets(0, 0, 0, 4));
+        legend.getChildren().add(more);
+    }
+
+    // ── Day detail ────────────────────────────────────────────────────────────
 
     private void showDetail(LocalDate date, StudyDaySummary summary) {
-    detailPanel.getChildren().clear();
-    detailPanel.setVisible(true);
-    detailPanel.setManaged(true);
+        detailPanel.getChildren().clear();
+        detailPanel.setVisible(true);
+        detailPanel.setManaged(true);
+        detailPanel.setPadding(new Insets(16, 0, 0, 0));
 
-    // ── Close button
-    Button closeBtn = new Button("✕");
-    closeBtn.setStyle(
-        "-fx-background-color: transparent;" +
-        "-fx-text-fill: #7d8590;" +
-        "-fx-font-size: 13;" +
-        "-fx-padding: 0 4;" +
-        "-fx-cursor: hand;"
-    );
-    closeBtn.setOnAction(e -> {
-        detailPanel.setVisible(false);
-        detailPanel.setManaged(false);
-    });
-
-    HBox headerRow = new HBox();
-    headerRow.setAlignment(Pos.CENTER_LEFT);
-    HBox.setHgrow(headerRow, Priority.ALWAYS);
+        Region divider = new Region();
+        divider.setPrefHeight(1);
+        divider.setMinHeight(1);
+        divider.setStyle("-fx-background-color: " + ThemeManager.border() + ";");
+        VBox.setMargin(divider, new Insets(0, 0, 8, 0));
 
         Label dateLbl = new Label(date.format(DISPLAY_FMT));
-dateLbl.setFont(Font.font("System", FontWeight.BOLD, 12));
-dateLbl.setStyle("-fx-text-fill: #e6edf3;");
-HBox.setHgrow(dateLbl, Priority.ALWAYS);
+        dateLbl.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 13));
+        dateLbl.setStyle("-fx-text-fill: " + ThemeManager.textPrimary() + ";");
 
-headerRow.getChildren().addAll(dateLbl, closeBtn);
-detailPanel.getChildren().add(headerRow);
+        Label totalLbl = new Label(summary == null ? ""
+            : StudySessionController.formatSeconds(summary.getTotalSeconds()) + " total");
+        totalLbl.setFont(Font.font(ThemeManager.FONT, FontWeight.NORMAL, 12));
+        totalLbl.setStyle("-fx-text-fill: " + ThemeManager.textSecondary() + ";");
+
+        Button closeBtn = new Button("Close");
+        closeBtn.setFont(Font.font(ThemeManager.FONT, FontWeight.NORMAL, 12));
+        closeBtn.setCursor(Cursor.HAND);
+        closeBtn.setStyle(
+            "-fx-background-color: transparent;" +
+            "-fx-text-fill: " + ThemeManager.textSecondary() + ";" +
+            "-fx-padding: 2 4;"
+        );
+        closeBtn.setOnAction(e -> { selectedDate = null; refresh(); });
+
+        Region grow = new Region();
+        HBox.setHgrow(grow, Priority.ALWAYS);
+        HBox header = new HBox(10, dateLbl, totalLbl, grow, closeBtn);
+        header.setAlignment(Pos.CENTER_LEFT);
+
+        detailPanel.getChildren().addAll(divider, header);
 
         if (summary == null || summary.getSessions().isEmpty()) {
-            Label noStudy = new Label("No study sessions on this day.");
-            noStudy.setStyle("-fx-text-fill: #7d8590; -fx-font-size: 12;");
-            detailPanel.getChildren().add(noStudy);
-        } else {
-            for (StudySession s : summary.getSessions()) {
-                HBox row = new HBox(8);
-                row.setAlignment(Pos.CENTER_LEFT);
-
-                Label bullet = new Label("▸");
-                bullet.setStyle("-fx-text-fill: #39d353; -fx-font-weight: bold;");
-
-                String t = (s.getTitle() == null || s.getTitle().isEmpty())
-                    ? "(no title)" : s.getTitle();
-
-                Label sessionLbl = new Label(s.getSubjectName() + " — " + t);
-                sessionLbl.setStyle("-fx-font-size: 12; -fx-text-fill: #c9d1d9;");
-                HBox.setHgrow(sessionLbl, Priority.ALWAYS);
-
-                Label timeLbl = new Label(s.getFormattedDuration());
-                timeLbl.setStyle(
-                    "-fx-font-size: 11; -fx-text-fill: #0d1117;" +
-                    "-fx-background-color: #39d353;" +
-                    "-fx-background-radius: 10; -fx-padding: 1 8;"
-                );
-
-                row.getChildren().addAll(bullet, sessionLbl, timeLbl);
-                detailPanel.getChildren().add(row);
-            }
-
-            Label sep = new Label("──────────────────────────");
-            sep.setStyle("-fx-text-fill: #30363d; -fx-font-size: 10;");
-
-            Label totalLbl = new Label(
-                "Total: " + StudySessionController.formatSeconds(summary.getTotalSeconds())
-            );
-            totalLbl.setFont(Font.font("System", FontWeight.BOLD, 12));
-            totalLbl.setStyle("-fx-text-fill: #39d353;");
-
-            detailPanel.getChildren().addAll(sep, totalLbl);
+            Label none = new Label("No study sessions on this day.");
+            none.setFont(Font.font(ThemeManager.FONT, FontWeight.NORMAL, 12));
+            none.setStyle("-fx-text-fill: " + ThemeManager.textSecondary() + ";");
+            detailPanel.getChildren().add(none);
+            return;
         }
+
+        for (StudySession s : summary.getSessions()) {
+            Region dot = new Region();
+            dot.setMinSize(6, 6);
+            dot.setMaxSize(6, 6);
+            dot.setStyle(
+                "-fx-background-color: " + ThemeManager.textAccent() + ";" +
+                "-fx-background-radius: 3;"
+            );
+
+            Label subject = new Label(s.getSubjectName());
+            subject.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 12));
+            subject.setStyle("-fx-text-fill: " + ThemeManager.textPrimary() + ";");
+
+            String t = (s.getTitle() == null || s.getTitle().isBlank()) ? "" : s.getTitle();
+            Label title = new Label(t);
+            title.setFont(Font.font(ThemeManager.FONT, FontWeight.NORMAL, 12));
+            title.setStyle("-fx-text-fill: " + ThemeManager.textSecondary() + ";");
+            HBox.setHgrow(title, Priority.ALWAYS);
+            title.setMaxWidth(Double.MAX_VALUE);
+
+            Label dur = new Label(s.getFormattedDuration());
+            dur.setFont(Font.font(ThemeManager.FONT, FontWeight.SEMI_BOLD, 12));
+            dur.setStyle("-fx-text-fill: " + ThemeManager.textPrimary() + ";");
+
+            HBox row = new HBox(10, dot, subject, title, dur);
+            row.setAlignment(Pos.CENTER_LEFT);
+            detailPanel.getChildren().add(row);
+        }
+    }
+
+    private void hideDetail() {
+        detailPanel.getChildren().clear();
+        detailPanel.setVisible(false);
+        detailPanel.setManaged(false);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private String buildTooltip(LocalDate date, StudyDaySummary summary) {
-        if (summary == null) {
-            return "No study on " + date.format(DISPLAY_FMT);
-        }
-        return summary.getSessions().size() + " session(s) on " +
-               date.format(DISPLAY_FMT) + "\n" +
-               StudySessionController.formatSeconds(summary.getTotalSeconds()) + " studied";
+    private String tooltipText(LocalDate date, StudyDaySummary summary) {
+        String day = date.format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH));
+        if (summary == null) return "No study · " + day;
+        int n = summary.getSessions().size();
+        return StudySessionController.formatSeconds(summary.getTotalSeconds()) +
+               " · " + n + " session" + (n != 1 ? "s" : "") + " · " + day;
     }
 
-    private HBox buildLegend() {
-        Label lessLbl = new Label("Less");
-        lessLbl.setStyle("-fx-font-size: 10; -fx-text-fill: #7d8590;");
-        Label moreLbl = new Label("More");
-        moreLbl.setStyle("-fx-font-size: 10; -fx-text-fill: #7d8590;");
-
-        HBox legend = new HBox(3, lessLbl, legendBox(COLOR_EMPTY), legendBox(COLOR_ACTIVE), moreLbl);
-        legend.setAlignment(Pos.CENTER_LEFT);
-        return legend;
-    }
-
-    private Rectangle legendBox(Color color) {
-        Rectangle r = new Rectangle(CELL_SIZE, CELL_SIZE);
-        r.setFill(color);
-        r.setArcWidth(2);
-        r.setArcHeight(2);
-        return r;
+    private Label smallMuted(String text) {
+        Label l = new Label(text);
+        l.setFont(Font.font(ThemeManager.FONT, FontWeight.NORMAL, 10));
+        l.setStyle("-fx-text-fill: " + ThemeManager.textSecondary() + ";");
+        return l;
     }
 }

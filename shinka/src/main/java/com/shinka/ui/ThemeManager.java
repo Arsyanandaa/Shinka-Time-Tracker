@@ -1,8 +1,11 @@
 package com.shinka.ui;
 
 /**
- * ThemeManager holds all color tokens for Light and Dark (Dracula) themes.
+ * ThemeManager holds all color tokens for Light and Dark themes.
  * All UI components read colors from here so toggling theme is centralized.
+ *
+ * Palette: warm neutral surfaces + one muted sage accent.
+ * The accent is used sparingly: primary actions, active states, and data.
  */
 public class ThemeManager {
 
@@ -14,54 +17,70 @@ public class ThemeManager {
     public static Theme getTheme()           { return current; }
     public static boolean isDark()           { return current == Theme.DARK; }
 
-    public static String bgMain()   { return isDark() ? "#0d1117" : "#f8f9fa"; }
-public static String bgCard()   { return isDark() ? "#161b22" : "#ffffff"; }
-public static String bgDarker() { return isDark() ? "#0d1117" : "#f1f3f5"; }
-public static String bgInput()  { return isDark() ? "#0d1117" : "#ffffff"; }
+    // ── Typography
+    public static final String FONT = "Segoe UI";
 
-// ── Text
-public static String textPrimary()  { return isDark() ? "#e6edf3" : "#212529"; }
-public static String textSecondary(){ return isDark() ? "#7d8590" : "#6c757d"; }
-public static String textHeading()  { return isDark() ? "#3fb950" : "#2d6a4f"; }
-public static String textAccent()   { return isDark() ? "#3fb950" : "#2d6a4f"; }
+    // ── Surfaces
+    public static String bgMain()   { return isDark() ? "#141513" : "#F5F4EF"; }
+    public static String bgCard()   { return isDark() ? "#1B1C1A" : "#FFFFFF"; }
+    public static String bgDarker() { return isDark() ? "#232421" : "#EDEBE4"; }
+    public static String bgInput()  { return isDark() ? "#111210" : "#FFFFFF"; }
 
-// ── Border
-public static String border()      { return isDark() ? "#30363d" : "#dee2e6"; }
-public static String borderInput() { return isDark() ? "#30363d" : "#ced4da"; }
+    // ── Text
+    public static String textPrimary()   { return isDark() ? "#ECEAE3" : "#1E1F1C"; }
+    public static String textSecondary() { return isDark() ? "#8C8A82" : "#6F6D66"; }
+    public static String textHeading()   { return isDark() ? "#ECEAE3" : "#1E1F1C"; }
+    public static String textAccent()    { return isDark() ? "#9CC598" : "#3E6A47"; }
 
-// ── Button primary
-public static String btnPrimaryBg()    { return isDark() ? "#238636" : "#2d6a4f"; }
-public static String btnPrimaryFg()    { return isDark() ? "#ffffff" : "#ffffff"; }
-public static String btnPrimaryHover() { return isDark() ? "#2ea043" : "#1b4332"; }
+    // ── Border
+    public static String border()      { return isDark() ? "#2A2B28" : "#E3E0D7"; }
+    public static String borderInput() { return isDark() ? "#34352F" : "#D6D3C9"; }
 
-// ── Separator
-public static String separator() { return isDark() ? "#30363d" : "#dee2e6"; }
+    // ── Button primary
+    public static String btnPrimaryBg()    { return isDark() ? "#9CC598" : "#3E6A47"; }
+    public static String btnPrimaryFg()    { return isDark() ? "#121510" : "#FFFFFF"; }
+    public static String btnPrimaryHover() { return isDark() ? "#AFD2AB" : "#33583B"; }
 
-// ── Tab pane
-public static String tabBg()       { return isDark() ? "#010409" : "#f8f9fa"; }
-public static String tabSelected() { return isDark() ? "#161b22" : "#ffffff"; }
-public static String tabText()     { return isDark() ? "#e6edf3" : "#495057"; }
+    // ── Separator
+    public static String separator() { return isDark() ? "#262724" : "#E8E6DE"; }
 
-// ── Timer
-public static String timerIdle()    { return isDark() ? "#3fb950" : "#2d6a4f"; }
-public static String timerRunning() { return "#e63946"; }
-public static String timerPaused()  { return "#e67e22"; }
+    // ── Tab pane
+    public static String tabBg()       { return isDark() ? "#111210" : "#F5F4EF"; }
+    public static String tabSelected() { return isDark() ? "#1B1C1A" : "#FFFFFF"; }
+    public static String tabText()     { return isDark() ? "#ECEAE3" : "#3A3A36"; }
+
+    // ── Timer
+    public static String timerIdle()    { return textAccent(); }
+    public static String timerRunning() { return isDark() ? "#E8836A" : "#C8553D"; }
+    public static String timerPaused()  { return isDark() ? "#E2B062" : "#B7832F"; }
+
+    // ── Heatmap (level 0 = no study, 4 = most)
+    public static String heatLevel(int level) {
+        String[] dark  = { "#232421", "#2F422E", "#4A6D47", "#709C6C", "#A3CD9F" };
+        String[] light = { "#ECEAE3", "#D3E3CF", "#A2C59E", "#669968", "#3E6A47" };
+        int i = Math.max(0, Math.min(4, level));
+        return isDark() ? dark[i] : light[i];
+    }
 
     // ── Full style strings
     public static String cardStyle() {
         return "-fx-background-color: " + bgCard() + ";" +
-               "-fx-background-radius: 10;" +
+               "-fx-background-radius: 12;" +
+               "-fx-border-color: " + border() + ";" +
+               "-fx-border-radius: 12;" +
+               "-fx-border-width: 1;" +
                (isDark()
-                ? "-fx-border-color: " + border() + "; -fx-border-radius: 10; -fx-border-width: 1;"
-                : "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.07), 6, 0, 0, 2);");
+                ? ""
+                : "-fx-effect: dropshadow(gaussian, rgba(40,35,20,0.05), 10, 0, 0, 2);");
     }
 
     public static String inputStyle() {
         return "-fx-background-color: " + bgInput() + ";" +
                "-fx-text-fill: " + textPrimary() + ";" +
+               "-fx-prompt-text-fill: " + textSecondary() + ";" +
                "-fx-padding: 8 12;" +
-               "-fx-background-radius: 6;" +
+               "-fx-background-radius: 8;" +
                "-fx-border-color: " + borderInput() + ";" +
-               "-fx-border-radius: 6;";
+               "-fx-border-radius: 8;";
     }
 }

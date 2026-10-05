@@ -1,5 +1,4 @@
 com\shinka\model\StudySession.class
-com\shinka\ui\SubjectsView$SubjectCell.class
 com\shinka\ui\ThemeManager.class
 com\shinka\main\MainApp.class
 com\shinka\ui\DashboardView.class
